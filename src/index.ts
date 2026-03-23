@@ -1,48 +1,43 @@
+import { WebSocketServer, WebSocket } from 'ws';
 import type { Player } from "./interfaces/player";
 
-class Server {
-    private socket;
+class GameServer {
+    private wss: WebSocketServer;
     private users: Player[] = [];
 
-    constructor () {
-        this.socket = new WebSocket("ws://localhost:65311");
-        this.socket.addEventListener('open', this.openSocket.bind(this));
-        this.socket.addEventListener('close', this.closeSocket.bind(this));
-        this.socket.addEventListener('error', this.errorSocket.bind(this));
-        this.socket.addEventListener('message', this.socketMessage.bind(this));
+    constructor (port: number) {
+        this.wss = new WebSocketServer({ port });
+        
+        this.wss.on('connection', (socket: WebSocket) => {
+            console.log("Новое подключение!");
 
-        this.checkConnection();
+            socket.on('message', (data) => this.socketMessage(data, socket));
+            socket.on('close', (code, reason) => this.closeSocket(code, reason));
+            socket.on('error', (err) => this.errorSocket(err));
+
+            this.openSocket(socket);
+        });
+
+        console.log(`Сервер запущен на ws://localhost:${port}`);
     }
 
-    private checkConnection() {
-        setTimeout(() => {
-            if (this.socket.readyState === WebSocket.OPEN) {
-                console.log("WebSocket IS OPEN: ws://localhost:65311")
-            } else if (this.socket.readyState === WebSocket.CONNECTING) {
-                console.log("WebSocket is connection...");
-            } else {
-                console.log("WebSocket not connected");
-            }
-        }, 100);
+    private openSocket(socket: WebSocket) {
+        socket.send('Привет игрок! Welcome to Quiz');
     }
 
-    private openSocket(event: Event) {
-        console.log('WebSocket connection estabilished');
-        this.socket.send('Hello Server');
+   private closeSocket(code: number, reason: Buffer) {
+        console.log('WebSocket connection closed:', code, reason.toString());
     }
 
-    private closeSocket(event: CloseEvent) {
-        console.log('WebSocket connection closed:', event.code, event.reason);
+    private errorSocket(err: Error) {
+        console.error('WebSocket error:', err.message);
     }
 
-    private errorSocket(event: Event) {
-        console.error('WebSocket error:', event);
-    }
-
-    private socketMessage(event: MessageEvent) {
-        console.log('Message from server: ', event.data);
+    private socketMessage(data: any, socket: WebSocket) {
+        const message = data.toString();
+        console.log('Message from player: ', message);
     }
 }
 
 
-let s1 = new Server();
+const server = new GameServer(65311);
