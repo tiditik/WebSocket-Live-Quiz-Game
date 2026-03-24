@@ -5,7 +5,7 @@
   "scripts": {
     "prestart": "npm run build",
     "start": "node dist/index.js",
-    "dev": "npx nodemon --watch src --exec ts-node src/index.ts",
+    "dev": "npx nodemon --exec ts-node --esm src/index.ts",
     "build": "tsc"
   },
   "keywords": [],
