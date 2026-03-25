@@ -9,6 +9,7 @@ class GameManager {
     private wss: WebSocketServer;
     private auth = new Auth();
     private users = new Map<WebSocket, string>(); // socket -> userId
+    private sockets = new Map<string, WebSocket>(); // userId -> socket
     private games = new Map<string, Game>();
     private nextGameId = 1;
 
@@ -17,6 +18,13 @@ class GameManager {
         this.wss = new WebSocketServer({ port });
         this.wss.on('connection', (socket) => {
             socket.on('message', (data) => this.socketMessage(socket, data));
+            socket.on('close', () => {
+                const userId = this.users.get(socket);
+                if (userId) {
+                    this.sockets.delete(userId);
+                    this.users.delete(socket);
+                }
+            })
         });
         console.log(`WebSocket server started at ws://localhost:${port}`);
     }
@@ -33,6 +41,7 @@ class GameManager {
                     
                     if (!result.error) {
                         this.users.set(socket, result.index);
+                        this.sockets.set(result.index, socket); 
                     }
                     
                     break;
@@ -58,9 +67,15 @@ class GameManager {
                         const game = this.games.get(payload.code);
                         if (game) {
                             game.addPlayer(player);
+
                             this.send(socket, RequestType.GAME_JOINED, { gameId: game.id });
+
+                            const sockets = game.players
+                                .map(p => this.sockets.get(p.index))
+                                .filter((s): s is WebSocket => !!s);
+                            
+                            this.broadcast(RequestType.PLAYER_JOINED, { playerName: player.name, playerCount: game.players.length }, sockets)
                         }
-                        console.log(game?.players);
                     }
                     break;
                     
@@ -71,6 +86,16 @@ class GameManager {
         } catch (err) {
             console.error("Parsing error:", err);
         }
+    }
+
+    private broadcast(type: string, data: any, target: WebSocket[]) {
+        const response = {
+            type: type,
+            data: JSON.stringify(data),
+            id: 0
+        };
+
+        target.forEach((client) => client.send(JSON.stringify(response)));
     }
 
     private send(socket: WebSocket, type: string, data: any) {
