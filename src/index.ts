@@ -11,6 +11,7 @@ class GameManager {
     private users = new Map<WebSocket, string>(); // socket -> userId
     private sockets = new Map<string, WebSocket>(); // userId -> socket
     private games = new Map<string, Game>();
+    private gamesById = new Map<string, Game>(); // gameId -> Game
     private nextGameId = 1;
 
 
@@ -35,7 +36,7 @@ class GameManager {
             const payload = JSON.parse(request.data);
 
             switch(request.type) {
-                case RequestType.REGISTER_USER:
+                case RequestType.REGISTER_USER: {
                     const result = this.auth.authenticate(payload.name, payload.password);
                     this.send(socket, RequestType.REGISTER_USER, result);
                     
@@ -45,7 +46,8 @@ class GameManager {
                     }
                     
                     break;
-                case RequestType.CREATE_GAME:
+                }
+                case RequestType.CREATE_GAME: {
                     const hostId = this.users.get(socket);
                     const questions: Question[] = payload.questions;
 
@@ -53,12 +55,14 @@ class GameManager {
                         const gameId = (this.nextGameId++).toString();
                         const newGame = new Game(gameId, hostId, questions);
                         this.games.set(newGame.code, newGame);
+                        this.gamesById.set(newGame.id, newGame);
 
                         this.send(socket, RequestType.GAME_CREATED, { gameId: newGame.id, code: newGame.code });
                     }
 
                     break;
-                case RequestType.JOIN_GAME:
+                }
+                case RequestType.JOIN_GAME: {
                     const playerId = this.users.get(socket);
                     if (playerId && payload.code) {
                         const player = this.auth.getPlayerByIndex(playerId);
@@ -78,7 +82,38 @@ class GameManager {
                         }
                     }
                     break;
+                }
+                case RequestType.START_GAME: {
+                    const playerId = this.users.get(socket);
+                    const currentGame = this.gamesById.get(payload.gameId);
+
+                    if (!currentGame) { // Если игры не существует
+                        return;
+                    }
+
+                    if (currentGame.hostId !== playerId) { // Если игрок не хост то скипаем 
+                        return;
+                    }
                     
+                    currentGame.status = 'in_progress';
+                    currentGame.currentQuestion = 0;
+
+                    const requestData = {
+                        questionNumber: `${currentGame.currentQuestion}`,
+                        totalQuestions: `${currentGame.questions.length}`,
+                        text: `${currentGame.questions[currentGame.currentQuestion]?.text}`,
+                        options: currentGame.questions[currentGame.currentQuestion]?.options,
+                        timeLimitSec: `${currentGame.questions[currentGame.currentQuestion]?.timeLimitSec}`,
+                    };
+
+                    const sockets = currentGame.players
+                        .map(p => this.sockets.get(p.index))
+                        .filter((s): s is WebSocket => !!s);
+                    
+                    this.broadcast(RequestType.QUESTION, requestData, sockets);
+                    
+                    break;
+                }
                 default:
                     console.error('Неизвестная команда');
             }
