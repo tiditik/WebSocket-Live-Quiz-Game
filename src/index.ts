@@ -12,6 +12,10 @@ class GameManager {
     private sockets = new Map<string, WebSocket>(); // userId -> socket
     private games = new Map<string, Game>();
     private gamesById = new Map<string, Game>(); // gameId -> Game
+    private questionStartedTime = new Map<string, number>(); // gameId -> number 
+    private gameAnswerPlayer = new Map<string, string>(); // playerId -> answer
+    private gameAnswerPlayerTime = new Map<string, number>(); // playerId -> number
+
     private nextGameId = 1;
 
 
@@ -35,16 +39,16 @@ class GameManager {
             const request = JSON.parse(rawData.toString());
             const payload = JSON.parse(request.data);
 
-            switch(request.type) {
+            switch (request.type) {
                 case RequestType.REGISTER_USER: {
                     const result = this.auth.authenticate(payload.name, payload.password);
                     this.send(socket, RequestType.REGISTER_USER, result);
-                    
+
                     if (!result.error) {
                         this.users.set(socket, result.index);
-                        this.sockets.set(result.index, socket); 
+                        this.sockets.set(result.index, socket);
                     }
-                    
+
                     break;
                 }
                 case RequestType.CREATE_GAME: {
@@ -77,7 +81,7 @@ class GameManager {
                             const sockets = game.players
                                 .map(p => this.sockets.get(p.index))
                                 .filter((s): s is WebSocket => !!s);
-                            
+
                             this.broadcast(RequestType.PLAYER_JOINED, { playerName: player.name, playerCount: game.players.length }, sockets)
                         }
                     }
@@ -94,7 +98,7 @@ class GameManager {
                     if (currentGame.hostId !== playerId) { // Если игрок не хост то скипаем 
                         return;
                     }
-                    
+
                     currentGame.status = 'in_progress';
                     currentGame.currentQuestion = 0;
 
@@ -109,9 +113,40 @@ class GameManager {
                     const sockets = currentGame.players
                         .map(p => this.sockets.get(p.index))
                         .filter((s): s is WebSocket => !!s);
-                    
+
                     this.broadcast(RequestType.QUESTION, requestData, sockets);
-                    
+
+                    const startQuestionTime = new Date().getTime();
+                    this.questionStartedTime.set(currentGame.id, startQuestionTime);
+
+                    setTimeout(() => {
+                        this.processResults(currentGame);
+                    }, 1000 * currentGame.questions[currentGame.currentQuestion]?.timeLimitSec!);
+
+                    break;
+                }
+                case RequestType.ANSWER: {
+                    const playerId = this.users.get(socket);
+                    const currentGame = this.gamesById.get(payload.gameId);
+                    const questionIndex = payload.questionIndex;
+                    const answerIndex = payload.answerIndex;
+                    const answerTime = new Date().getTime();
+
+                    if (!playerId) {
+                        return;
+                    }
+
+                    if (!currentGame) {
+                        return;
+                    }
+
+                    const valueAnswer = answerIndex;
+                    this.gameAnswerPlayer.set(playerId, valueAnswer);
+
+                    this.gameAnswerPlayerTime.set(playerId, answerTime);
+
+                    this.send(socket, RequestType.ANSWER_ACCEPTED, { questionIndex });
+
                     break;
                 }
                 default:
@@ -121,6 +156,58 @@ class GameManager {
         } catch (err) {
             console.error("Parsing error:", err);
         }
+    }
+
+    private processResults(game: Game) {
+        const questionIndex = game.currentQuestion;
+        const correctIndex = game.questions[questionIndex]?.correctIndex;
+        const basePoints = 1000;
+        let pointsEarned;
+
+        const playerResults = game.players.map((player) => {
+            const playerAnswer = this.gameAnswerPlayer.get(player.index.toString());
+            const playerAnswered = !!playerAnswer;
+            let correctAnswer;
+            let pointsEarned;
+
+            if (!playerAnswer) {
+                pointsEarned = 0;
+                correctAnswer = false;
+            } else {
+                correctAnswer = Number(playerAnswer) === correctIndex;
+                if (correctAnswer) {
+                    const questionTimeLimit = game.questions[questionIndex]?.timeLimitSec!;
+                    const answerTime = this.gameAnswerPlayerTime.get(player.index)!;
+                    const startTime = this.questionStartedTime.get(game.id)!;
+                    
+                    const timeSpent = (answerTime - startTime) / 1000;
+                    let playerTimeRemaining = questionTimeLimit - timeSpent;
+
+                    playerTimeRemaining = Math.max(0, Math.min(playerTimeRemaining, questionTimeLimit));
+
+                    pointsEarned = basePoints * (playerTimeRemaining / questionTimeLimit);
+                } else {
+                    pointsEarned = 0;
+                }
+            }
+
+            const resultData = {
+                name: player.name,
+                answered: playerAnswered,
+                correct: correctAnswer,
+                pointsEarned: Number(Math.max(0, pointsEarned).toFixed(0)),
+                totalScore: Number((player.score + Math.max(0, pointsEarned)).toFixed(0))
+            };
+
+            return resultData;
+        });
+
+        const sockets = game.players
+            .map(p => this.sockets.get(p.index))
+            .filter((s): s is WebSocket => !!s);
+
+        this.broadcast(RequestType.QUESTION_RESULT, { questionIndex, correctIndex, playerResults }, sockets);
+        console.log('Следующий вопрос либо завершение игры');
     }
 
     private broadcast(type: string, data: any, target: WebSocket[]) {
